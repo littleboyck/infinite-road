@@ -1,3 +1,14 @@
 .DS_Store
 *.log
 __pycache__/
+
+# 调试截图（体积大，不进仓库；如需保留请手动 git add -f）
+screenshots/*.png
+screenshots/*.jpg
+screenshots/*.webp
+
+# 未完成的图示草稿
+diagrams/*.candidate.json
+
+# 仅供已删除的 plan-b 使用（保留文件但不入库）
+vendor/postprocessing.mjs

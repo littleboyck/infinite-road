@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="icon" href="data:," />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>方案 D · 真路径追踪渐进收敛</title>
+<style>
+  :root {
+    --ink: #e9f0f8;
+    --dim: rgba(233, 240, 248, 0.58);
+    --faint: rgba(233, 240, 248, 0.3);
+    --line: rgba(255, 255, 255, 0.12);
+    --panel: rgba(8, 12, 18, 0.62);
+    --accent: #7ee0a8;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #05080c; color: var(--ink); font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  body { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .panel {
+    position: absolute;
+    /* 不再用 backdrop-filter：面板压在 WebGL canvas 上时，
+       浏览器要每帧回读整块画面做模糊，Retina 上非常伤帧率。
+       这里用略微更实的高透明度底色代替，观感几乎一样。 */
+    background: rgba(9, 13, 20, 0.86); border: 1px solid var(--line); border-radius: 14px;
+  }
+  #hud { top: 16px; left: 16px; width: 236px; padding: 14px 16px 12px; }
+  #hud .tag {
+    display: inline-block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid rgba(126, 224, 168, .38);
+    background: rgba(126, 224, 168, .1); border-radius: 999px; padding: 2px 8px; margin-bottom: 9px;
+  }
+  #hud h1 { margin: 0 0 2px; font-size: 16px; font-weight: 650; }
+  #hud .sub { margin: 0 0 12px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding: 4px 0; }
+  .row .k { color: var(--dim); }
+  .row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  #hud-bar-wrap { height: 3px; background: rgba(255,255,255,.1); border-radius: 2px; margin-top: 9px; overflow: hidden; }
+  #hud-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #7ee0a8, #c8ffe0); transition: width .08s linear; }
+  #hud-state { margin-top: 8px; font-size: 11px; color: var(--accent); letter-spacing: .04em; }
+
+  #controls {
+    left: 50%; transform: translateX(-50%); bottom: 16px;
+    display: flex; gap: 18px; align-items: center; padding: 12px 18px;
+  }
+  .ctl { display: flex; flex-direction: column; gap: 5px; }
+  .ctl label { font-size: 10px; color: var(--faint); letter-spacing: .06em; text-transform: uppercase; }
+  .ctl .val { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  select, button {
+    font: inherit; font-size: 12px; color: var(--ink);
+    background: rgba(255,255,255,.06); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.12); }
+  .sep { width: 1px; height: 34px; background: var(--line); }
+</style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="hud" class="panel">
+    <span class="tag">Plan D</span>
+    <h1>真·路径追踪</h1>
+    <p class="sub">每帧多投一次光线。<br>噪点按 1/√N 自然收敛，无法「调」。 </p>
+    <div class="row"><span class="k">采样数</span><span class="v" id="hud-samples">0</span></div>
+    <div class="row"><span class="k">目标</span><span class="v" id="hud-target">128</span></div>
+    <div class="row"><span class="k">单采样耗时</span><span class="v" id="hud-rate">—</span></div>
+    <div class="row"><span class="k">追踪耗时</span><span class="v" id="hud-time">—</span></div>
+    <div class="row"><span class="k">BVH 构建</span><span class="v" id="hud-res">—</span></div>
+    <div id="hud-bar-wrap"><div id="hud-bar"></div></div>
+    <div id="hud-state">准备中…</div>
+  </div>
+
+  <div id="controls" class="panel">
+    <div class="ctl">
+      <label>目标采样</label>
+      <select id="in-target">
+        <option value="64">64</option>
+        <option value="128" selected>128</option>
+        <option value="256">256</option>
+        <option value="512">512</option>
+      </select>
+      <span class="val">越多越干净</span>
+    </div>
+    <div class="sep"></div>
+    <button id="btn-reset">重新追踪</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../vendor/three.module.js",
+      "three/addons/": "../vendor/",
+      "three/examples/jsm/postprocessing/Pass.js": "../vendor/Pass.js",
+      "three-mesh-bvh": "../vendor/three-mesh-bvh.mjs",
+      "three-gpu-pathtracer": "../vendor/three-gpu-pathtracer.mjs"
+    }
+  }
+  </script>
+  <script type="module" src="./plan-d.js"></script>
+</body>
+</html>

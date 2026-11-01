@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="icon" href="data:," />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>粒子聚合态特效 · viaduct_web</title>
+<style>
+  :root {
+    --ink: #e9f0f8;
+    --dim: rgba(233, 240, 248, 0.58);
+    --faint: rgba(233, 240, 248, 0.3);
+    --line: rgba(255, 255, 255, 0.12);
+    --accent: #63d7ff;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #04070b; color: var(--ink); font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  body { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .panel {
+    position: absolute;
+    background: rgba(9, 13, 20, 0.86); border: 1px solid var(--line); border-radius: 14px;
+  }
+
+  #hud { top: 16px; left: 16px; width: 240px; padding: 14px 16px 12px; }
+  #hud .tag {
+    display: inline-block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid rgba(99, 215, 255, .38);
+    background: rgba(99, 215, 255, .1); border-radius: 999px; padding: 2px 8px; margin-bottom: 9px;
+  }
+  #hud h1 { margin: 0 0 2px; font-size: 16px; font-weight: 650; }
+  #hud .sub { margin: 0 0 12px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding: 4px 0; }
+  .row .k { color: var(--dim); }
+  .row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  #hud-bar-wrap { height: 3px; background: rgba(255,255,255,.1); border-radius: 2px; margin-top: 9px; overflow: hidden; }
+  #hud-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #63d7ff, #d7f4ff); }
+  #hud-state { margin-top: 8px; font-size: 11px; color: var(--accent); letter-spacing: .04em; }
+
+  #controls {
+    left: 50%; transform: translateX(-50%); bottom: 16px;
+    display: flex; gap: 16px; align-items: center; padding: 12px 18px;
+    flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px);
+  }
+  .ctl { display: flex; flex-direction: column; gap: 5px; }
+  .ctl label { font-size: 10px; color: var(--faint); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+  .ctl .val { font-size: 11px; color: var(--dim); white-space: nowrap; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 110px; height: 3px;
+    background: rgba(255,255,255,.16); border-radius: 2px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--ink); border: 0; cursor: pointer;
+  }
+  select, button {
+    font: inherit; font-size: 12px; color: var(--ink);
+    background: rgba(255,255,255,.06); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.12); }
+  .sep { width: 1px; height: 34px; background: var(--line); }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .chk input { accent-color: var(--accent); }
+</style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="hud" class="panel">
+    <span class="tag">Particles</span>
+    <h1>粒子崩解（存档）</h1>
+    <p class="sub">实体表面被噪声「吃掉」，缺口边缘<br>飞散成方形粒子，前沿带烧蚀高光。</p>
+    <div class="row"><span class="k">进度</span><span class="v" id="hud-progress">—</span></div>
+    <div class="row"><span class="k">粒子数</span><span class="v" id="hud-count">—</span></div>
+    <div class="row"><span class="k">耗时</span><span class="v" id="hud-time">—</span></div>
+    <div class="row"><span class="k">帧率</span><span class="v" id="hud-fps">—</span></div>
+    <div id="hud-bar-wrap"><div id="hud-bar"></div></div>
+    <div id="hud-state">准备中…</div>
+  </div>
+
+  <div id="controls" class="panel">
+    <div class="ctl">
+      <label>模式</label>
+      <select id="in-mode">
+        <option value="dissolve" selected>崩解</option>
+        <option value="aggregate">聚合</option>
+      </select>
+      <span class="val">实体 → 粒子</span>
+    </div>
+    <div class="ctl">
+      <label>粒子数</label>
+      <select id="in-count">
+        <option value="40000">4 万</option>
+        <option value="80000">8 万</option>
+        <option value="120000" selected>12 万</option>
+        <option value="250000">25 万</option>
+        <option value="400000">40 万</option>
+      </select>
+      <span class="val">越多越像实体</span>
+    </div>
+    <div class="ctl">
+      <label>时长</label>
+      <input type="range" id="in-dur" min="800" max="6000" step="100" value="3600" />
+      <span class="val">0.8 – 6 s</span>
+    </div>
+    <div class="ctl">
+      <label>飞散距离</label>
+      <input type="range" id="in-scatter" min="0.4" max="4" step="0.05" value="1.6" />
+      <span class="val">越大飞得越远</span>
+    </div>
+    <div class="ctl">
+      <label>斑块尺度</label>
+      <input type="range" id="in-noise" min="0.8" max="6" step="0.1" value="2.2" />
+      <span class="val">小=碎斑，大=整块</span>
+    </div>
+    <div class="ctl">
+      <label>进度</label>
+      <input type="range" id="in-progress" min="0" max="100" step="1" value="0" />
+      <span class="val">可手动拖</span>
+    </div>
+    <div class="sep"></div>
+    <label class="chk"><input type="checkbox" id="in-loop" checked /> 循环</label>
+    <button id="btn-reset">重新播放</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../vendor/three.module.js",
+      "three/addons/": "../vendor/"
+    }
+  }
+  </script>
+  <script type="module" src="./particles-dissolve.js"></script>
+</body>
+</html>

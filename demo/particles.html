@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="icon" href="data:," />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>粒子聚合态特效 · viaduct_web</title>
+<style>
+  :root {
+    --ink: #e9f0f8;
+    --dim: rgba(233, 240, 248, 0.58);
+    --faint: rgba(233, 240, 248, 0.3);
+    --line: rgba(255, 255, 255, 0.12);
+    --accent: #63d7ff;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #04070b; color: var(--ink); font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  body { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .panel {
+    position: absolute;
+    background: rgba(9, 13, 20, 0.86); border: 1px solid var(--line); border-radius: 14px;
+  }
+
+  #hud { top: 16px; left: 16px; width: 240px; padding: 14px 16px 12px; }
+  #hud .tag {
+    display: inline-block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid rgba(99, 215, 255, .38);
+    background: rgba(99, 215, 255, .1); border-radius: 999px; padding: 2px 8px; margin-bottom: 9px;
+  }
+  #hud h1 { margin: 0 0 2px; font-size: 16px; font-weight: 650; }
+  #hud .sub { margin: 0 0 12px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding: 4px 0; }
+  .row .k { color: var(--dim); }
+  .row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  #hud-bar-wrap { height: 3px; background: rgba(255,255,255,.1); border-radius: 2px; margin-top: 9px; overflow: hidden; }
+  #hud-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #63d7ff, #d7f4ff); }
+  #hud-state { margin-top: 8px; font-size: 11px; color: var(--accent); letter-spacing: .04em; }
+
+  #controls {
+    left: 50%; transform: translateX(-50%); bottom: 16px;
+    display: flex; gap: 16px; align-items: center; padding: 12px 18px;
+    flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px);
+  }
+  .ctl { display: flex; flex-direction: column; gap: 5px; }
+  .ctl label { font-size: 10px; color: var(--faint); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+  .ctl .val { font-size: 11px; color: var(--dim); white-space: nowrap; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 110px; height: 3px;
+    background: rgba(255,255,255,.16); border-radius: 2px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--ink); border: 0; cursor: pointer;
+  }
+  select, button {
+    font: inherit; font-size: 12px; color: var(--ink);
+    background: rgba(255,255,255,.06); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.12); }
+  .sep { width: 1px; height: 34px; background: var(--line); }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .chk input { accent-color: var(--accent); }
+</style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="hud" class="panel">
+    <span class="tag">Particles</span>
+    <h1>全场景粒子聚合</h1>
+    <p class="sub">车与地面全部由粒子构成，单色冷白，<br>明暗只由光照决定。</p>
+    <div class="row"><span class="k">进度</span><span class="v" id="hud-progress">—</span></div>
+    <div class="row"><span class="k">粒子数</span><span class="v" id="hud-count">—</span></div>
+    <div class="row"><span class="k">耗时</span><span class="v" id="hud-time">—</span></div>
+    <div class="row"><span class="k">帧率</span><span class="v" id="hud-fps">—</span></div>
+    <div id="hud-bar-wrap"><div id="hud-bar"></div></div>
+    <div id="hud-state">准备中…</div>
+  </div>
+
+  <!-- ==================================================================
+       控件 → 状态字段 映射（对应 particles.js 里的 state）
+         in-carcount    车身粒子数  → state.carCount      （改后 rebuild）
+         in-groundcount 地面粒子数  → state.groundCount   （改后 rebuild）
+         in-dur         聚合时长    → state.duration      （ms，1~10 s）
+         in-fuse        凝结时长    → state.dissolveDuration（ms，1~10 s）
+         in-dir         进入方向    → state.entry / entryMode（"in"/"out" 走径向）
+         in-ease        速度曲线    → state.easeMode      （0 匀速/1 缓出/2 缓入/3 缓入缓出）
+         in-beats       节拍数      → state.beats         （1 = 连续推进）
+         in-spread      下落高度    → state.travel        （世界单位）
+         in-size        粒子大小    → state.size          （世界单位）
+         in-contrast    明暗对比    → state.contrast      （对 lum 做 pow）
+         in-sweepw      光带宽度    → state.sweepW
+         in-sweep       扫光开关    → state.sweep
+         in-loop        循环播放    → state.loop（完全凝结后才重启）
+         in-progress    手动进度    → state.progress（调试用）
+       ================================================================== -->
+  <div id="controls" class="panel">
+    <div class="ctl">
+      <label>车身粒子</label>
+      <select id="in-carcount">
+        <option value="80000">8 万</option>
+        <option value="160000">16 万</option>
+        <option value="240000">24 万</option>
+        <option value="320000" selected>32 万</option>
+        <option value="480000">48 万</option>
+        <option value="640000">64 万</option>
+      </select>
+      <span class="val">车模型表面采样点数</span>
+    </div>
+    <div class="ctl">
+      <label>地面粒子</label>
+      <select id="in-groundcount">
+        <option value="20000">2 万</option>
+        <option value="50000">5 万</option>
+        <option value="80000" selected>8 万</option>
+        <option value="120000">12 万</option>
+        <option value="200000">20 万</option>
+      </select>
+      <span class="val">地面圆盘撒点数</span>
+    </div>
+    <div class="ctl">
+      <label>聚合时长</label>
+      <input type="range" id="in-dur" min="1000" max="10000" step="100" value="5000" />
+      <span class="val">1 – 10 s</span>
+    </div>
+    <div class="ctl">
+      <label>凝结时长</label>
+      <input type="range" id="in-fuse" min="1000" max="10000" step="100" value="5000" />
+      <span class="val">粒子 → 实体，1 – 10 s</span>
+    </div>
+    <div class="ctl">
+      <label>进入方向</label>
+      <select id="in-dir">
+        <option value="0,-1,0">上 → 下</option>
+        <option value="1,0,0">左 → 右</option>
+        <option value="-1,0,0">右 → 左</option>
+        <option value="0,0,-1" selected>车头 → 车尾</option>
+        <option value="0,0,1">车尾 → 车头</option>
+        <option value="in">外 → 里</option>
+        <option value="out">里 → 外</option>
+      </select>
+      <span class="val">节拍推进顺序（下落方向恒为竖直）</span>
+    </div>
+    <div class="ctl">
+      <label>运动方式</label>
+      <select id="in-ease">
+        <option value="0" selected>匀速（线性）</option>
+        <option value="1">缓出（快到慢）</option>
+        <option value="2">缓入（慢到快）</option>
+        <option value="3">缓入缓出</option>
+      </select>
+      <span class="val">进入的速度曲线</span>
+    </div>
+    <div class="ctl">
+      <label>节拍数</label>
+      <input type="range" id="in-beats" min="1" max="20" step="1" value="1" />
+      <span class="val">1 = 连续，越大越分批</span>
+    </div>
+    <div class="ctl">
+      <label>飞行距离</label>
+      <input type="range" id="in-spread" min="0.3" max="6" step="0.1" value="0.3" />
+      <span class="val">从多远飞进来</span>
+    </div>
+    <div class="ctl">
+      <label>粒子大小</label>
+      <input type="range" id="in-size" min="0.004" max="0.03" step="0.001" value="0.008" />
+      <span class="val">世界单位</span>
+    </div>
+    <div class="ctl">
+      <label>明暗对比</label>
+      <input type="range" id="in-contrast" min="0.4" max="2.4" step="0.05" value="1.2" />
+      <span class="val">越大暗部越黑</span>
+    </div>
+    <div class="ctl">
+      <label>光带宽度</label>
+      <input type="range" id="in-sweepw" min="0.08" max="1.2" step="0.02" value="0.08" />
+      <span class="val">窄 = 细光刃</span>
+    </div>
+    <div class="ctl">
+      <label>进度</label>
+      <input type="range" id="in-progress" min="0" max="100" step="1" value="0" />
+      <span class="val">可手动拖</span>
+    </div>
+    <div class="sep"></div>
+    <label class="chk"><input type="checkbox" id="in-sweep" checked /> 扫光</label>
+    <label class="chk"><input type="checkbox" id="in-loop" checked /> 循环</label>
+    <button id="btn-reset">重新聚合</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../vendor/three.module.js",
+      "three/addons/": "../vendor/"
+    }
+  }
+  </script>
+  <script type="module" src="./particles.js"></script>
+</body>
+</html>

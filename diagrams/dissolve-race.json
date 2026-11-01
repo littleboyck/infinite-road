@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "上色未完成就开始凝结的原因",
+    "locale": "zh-CN",
+    "output": "dissolve-race.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "主流程（由聚合进度驱动）" },
+    { "id": "paint", "label": "上色（由扫光前沿驱动）" },
+    { "id": "race", "label": "冲突判定" }
+  ],
+  "states": [
+    { "id": "aggregating", "type": "active", "label": "聚合中", "sublabel": "粒子落位", "lane": "main", "col": 0, "step": "0 – 5.0 s", "tag": "duration 5000" },
+    { "id": "aggregated", "type": "start", "label": "聚合完成", "sublabel": "progress = 1", "lane": "main", "col": 1, "step": "t₀", "tag": "记下 progressOneAt" },
+    { "id": "wait2s", "type": "waiting", "label": "等待 2 秒", "sublabel": "固定延迟", "lane": "main", "col": 2, "step": "+2000 ms", "tag": "与上色无关" },
+    { "id": "dissolving", "type": "active", "label": "凝结中", "sublabel": "粒子被表面吃掉", "lane": "main", "col": 3, "step": "dissolveDuration", "tag": "默认 5000 ms" },
+    { "id": "solid", "type": "success", "label": "凝结完成", "sublabel": "完全实体", "lane": "main", "col": 4, "step": "dissolveT = 1", "tag": "结束" },
+    { "id": "sweeping", "type": "active", "label": "扫光扫描中", "sublabel": "从车头 +3.4 到车尾 −3.4", "lane": "paint", "col": 1, "step": "周期 14.3 s", "tag": "colorFront 取最小值" },
+    { "id": "painted", "type": "success", "label": "上色自然完成", "sublabel": "colorFront ≤ −2.2", "lane": "paint", "col": 3, "step": "≈ 11–14 s", "tag": "远晚于 2 s" },
+    { "id": "check", "type": "decision", "label": "2 秒到点：扫完了吗？", "sublabel": "检查 colorFront", "lane": "race", "col": 2, "tag": "几乎总是「否」" },
+    { "id": "force", "type": "failure", "label": "强制补完上色", "sublabel": "colorFront = −2.2", "lane": "race", "col": 3, "tag": "瞬间跳变" }
+  ],
+  "transitions": [
+    { "id": "t-generate", "from": "aggregating", "to": "aggregated", "label": "落位完毕" },
+    { "id": "t-timer", "from": "aggregated", "to": "wait2s", "label": "开始计时" },
+    { "id": "t-check", "from": "wait2s", "to": "check", "label": "2 s 到期" },
+    { "id": "t-notyet", "from": "check", "to": "force", "label": "否：还没扫完", "variant": "security" },
+    { "id": "t-force", "from": "force", "to": "dissolving", "label": "接着开始凝结", "variant": "emphasis" },
+    { "id": "t-yes", "from": "check", "to": "dissolving", "label": "是：正常进入" },
+    { "id": "t-paint", "from": "sweeping", "to": "painted", "label": "光带扫到车尾" },
+    { "id": "t-done", "from": "dissolving", "to": "solid", "label": "噪声长满" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "两个计时器根本不同步",
+      "items": [
+        "等待 2 s 从「聚合完成」起算，跟扫光没有任何关系",
+        "扫光一个来回要 14.3 s，2 s 窗口内几乎不可能扫到车尾"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "实测（默认参数）",
+      "items": [
+        "5.08 s 聚合到 100%，7.25 s 凝结开始（+2.16 s）",
+        "同一帧 colorFront 被强制拉到 −2.2，上色「瞬间完成」"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "为什么「有时候」看起来正常",
+      "items": [
+        "扫光相位取自 performance.now()，刷新时机不同相位就不同",
+        "偶尔光带正好在车尾附近，2 s 内真能扫完 → 看不出跳变"
+      ]
+    }
+  ]
+}
