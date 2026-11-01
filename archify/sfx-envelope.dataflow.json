@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "音频分段：从包络曲线到循环窗口",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1085,
+      560
+    ]
+  },
+  "stages": [
+    {
+      "label": "音源"
+    },
+    {
+      "label": "解码"
+    },
+    {
+      "label": "分窗"
+    },
+    {
+      "label": "看包络"
+    },
+    {
+      "label": "切片与播放"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "src",
+      "type": "external",
+      "label": "引擎录音 mp3",
+      "sublabel": "51 s · CC0",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "decode",
+      "type": "backend",
+      "label": "解码成 PCM",
+      "sublabel": "单声道 22.05 kHz",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "window",
+      "type": "backend",
+      "label": "20 ms 分窗",
+      "sublabel": "每 20 ms 一个窗口",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "envelope",
+      "type": "backend",
+      "label": "包络曲线",
+      "sublabel": "每窗取峰值 + RMS(dB)",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "boundary",
+      "type": "backend",
+      "label": "找分段边界",
+      "sublabel": "平直段 ≈ −22.2 dB",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "ignition",
+      "type": "backend",
+      "label": "点火段",
+      "sublabel": "0 – 3.4 s",
+      "stage": 3,
+      "row": 2
+    },
+    {
+      "id": "idle",
+      "type": "backend",
+      "label": "循环窗口",
+      "sublabel": "30 – 40 s",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "slice",
+      "type": "backend",
+      "label": "切片 + 交叉淡化",
+      "sublabel": "10 s 循环 · 80 ms 接缝",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "player",
+      "type": "frontend",
+      "label": "WebAudio 播放器",
+      "sublabel": "按车速调音高",
+      "stage": 4,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "id": "f-decode",
+      "from": "src",
+      "to": "decode",
+      "label": "mp3 字节",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f-window",
+      "from": "decode",
+      "to": "window",
+      "label": "采样点序列",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f-env",
+      "from": "window",
+      "to": "envelope",
+      "label": "每窗 2 个数",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f-boundary",
+      "from": "envelope",
+      "to": "boundary",
+      "label": "曲线变平的位置",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f-idle",
+      "from": "boundary",
+      "to": "idle",
+      "label": "取平稳段内部",
+      "variant": "emphasis",
+      "labelAt": [
+        745,
+        200
+      ]
+    },
+    {
+      "id": "f-ignition",
+      "from": "window",
+      "to": "ignition",
+      "label": "开头冲击段",
+      "variant": "default"
+    },
+    {
+      "id": "f-slice",
+      "from": "idle",
+      "to": "slice",
+      "label": "拷出 10 s 采样",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f-play",
+      "from": "slice",
+      "to": "player",
+      "label": "无缝循环缓冲",
+      "variant": "emphasis",
+      "labelAt": [
+        960,
+        200
+      ]
+    },
+    {
+      "id": "f-ignite",
+      "from": "ignition",
+      "to": "player",
+      "label": "启动时放一次",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "包络是什么",
+      "items": [
+        "把音频切成一格一格（这里 20 ms 一格）",
+        "每格只留两个数：最大振幅、平均响度",
+        "画成曲线后，51 秒的音频变成一条高低起伏的线"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "怎么读边界",
+      "items": [
+        "曲线起伏大 = 点火、轰油，瞬间变化多",
+        "曲线平直 = 稳定怠速，声音一直在重复",
+        "平坦段的起止位置，就是天然的切分点"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "切完怎么用",
+      "items": [
+        "平直段里取 30–40 s，接缝做 80 ms 交叉淡化",
+        "起伏段只取开头 0–3.4 s 当点火音效",
+        "剩余素材不用，循环体越小越省内存"
+      ]
+    }
+  ]
+}

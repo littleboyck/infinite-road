@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="icon" href="data:," />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>无限公路 · 直线巡航</title>
+<style>
+  :root {
+    --ink: #e9f0f8;
+    --ink-dim: rgba(233, 240, 248, 0.56);
+    --ink-faint: rgba(233, 240, 248, 0.32);
+    --line: rgba(255, 255, 255, 0.12);
+    --panel: rgba(9, 14, 22, 0.58);
+    --accent: #8fc4ff;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+            "Noto Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0a111a; /* 天空穹顶会盖住这里，仅作 canvas 前的兜底 */
+    color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  #app { position: fixed; inset: 0; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 1.2s ease;
+  }
+  canvas.is-ready { opacity: 1; }
+
+  /* ------------------------------------------------------------ 加载遮罩 */
+  #loader {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    background:
+      radial-gradient(120% 90% at 50% 38%, #16222f 0%, #0b131d 52%, #070c13 100%);
+    transition: opacity 1s ease, visibility 1s ease;
+  }
+  #loader.is-hidden { opacity: 0; visibility: hidden; }
+
+  .loader-mark {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 1px solid rgba(143, 196, 255, 0.34);
+    position: relative;
+  }
+  .loader-mark::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    border-top-color: var(--accent);
+    animation: spin 1.15s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loader-title {
+    font-size: 13px;
+    letter-spacing: 0.42em;
+    text-indent: 0.42em;
+    color: rgba(233, 240, 248, 0.86);
+    font-weight: 400;
+  }
+
+  .loader-bar {
+    width: min(260px, 56vw);
+    height: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .loader-bar > i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #5f9fe0, #bfe0ff);
+    box-shadow: 0 0 12px rgba(143, 196, 255, 0.55);
+    transition: width 0.25s ease;
+  }
+  .loader-status {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ------------------------------------------------------------ 主题标题 */
+  #brand {
+    position: fixed;
+    left: 26px;
+    top: 24px;
+    z-index: 10;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity 1.4s ease 0.35s, transform 1.4s ease 0.35s;
+  }
+  #brand.is-ready { opacity: 1; transform: none; }
+  #brand .t1 {
+    font-size: 15px;
+    letter-spacing: 0.26em;
+    font-weight: 500;
+    text-shadow: 0 1px 14px rgba(0, 0, 0, 0.45);
+  }
+  #brand .t2 {
+    margin-top: 7px;
+    font-size: 10px;
+    letter-spacing: 0.3em;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ------------------------------------------------------------ 控制面板 */
+  #panel {
+    position: fixed;
+    right: 24px;
+    top: 24px;
+    z-index: 10;
+    width: 268px;
+    padding: 13px 14px 12px;
+    border-radius: 14px;
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;              /* 太窄时内部滚动，不显示滚动条 */
+    border: 1px solid var(--line);
+    background: var(--panel);
+    backdrop-filter: blur(16px) saturate(1.15);
+    -webkit-backdrop-filter: blur(16px) saturate(1.15);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 1.2s ease 0.5s, transform 1.2s ease 0.5s, width 0.25s ease;
+  }
+  #panel::-webkit-scrollbar { width: 0; height: 0; }
+  #panel.is-ready { opacity: 1; transform: none; }
+
+  /* 折叠后只留一行标题栏：标题 + 两颗等大方形按钮，排成一颗胶囊 */
+  #panel.collapsed {
+    width: max-content;
+    padding: 8px 10px 8px 15px;
+    border-radius: 999px;
+  }
+  #panel.collapsed .panel-body { display: none; }
+  #panel.collapsed .panel-head { margin-bottom: 0; gap: 14px; }
+  #panel.collapsed .panel-title { white-space: nowrap; }
+  #panel.collapsed #play-label { display: none; }
+  #panel.collapsed .head-actions { gap: 6px; }
+  #panel.collapsed .play-btn,
+  #panel.collapsed .icon-btn {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0;
+    gap: 0;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 0;
+  }
+
+  .head-actions { display: flex; align-items: center; gap: 7px; }
+  .icon-btn {
+    width: 26px;
+    min-width: 26px;
+    height: 24px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    line-height: 1;
+  }
+  .icon-btn .caret {
+    width: 0;
+    height: 0;
+    border-left: 4.5px solid transparent;
+    border-right: 4.5px solid transparent;
+    border-bottom: 5.5px solid currentColor;   /* 展开态：箭头朝上（点击收起） */
+    transition: transform 0.24s ease;
+  }
+  #panel.collapsed .icon-btn .caret { transform: rotate(180deg); }   /* 收起后朝下（点击展开） */
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .panel-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: var(--ink-dim);
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(143, 196, 255, 0.9);
+  }
+  .dot.paused { background: #7d8896; box-shadow: none; }
+
+  .ghost-btn {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--ink);
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    padding: 5px 11px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .ghost-btn:hover { background: rgba(255, 255, 255, 0.11); border-color: rgba(255, 255, 255, 0.2); }
+  .ghost-btn:active { transform: translateY(0.5px); }
+
+  .play-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 88px;
+    justify-content: center;
+  }
+  .play-btn .ico {
+    width: 0; height: 0;
+    border-left: 7px solid currentColor;
+    border-top: 4.5px solid transparent;
+    border-bottom: 4.5px solid transparent;
+  }
+  .play-btn .ico.pause {
+    width: 7px; height: 9px;
+    border: 0;
+    border-left: 2.5px solid currentColor;
+    border-right: 2.5px solid currentColor;
+  }
+
+  .row { margin-top: 9px; }
+  .row-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--ink-faint);
+    margin-bottom: 5px;
+  }
+  .row-label b {
+    color: var(--ink);
+    font-weight: 500;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+
+  /* 速度滑杆 */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 16px;
+    background: transparent;
+    cursor: pointer;
+    display: block;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, rgba(143, 196, 255, 0.85) var(--fill, 50%), rgba(255, 255, 255, 0.14) var(--fill, 50%));
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: #e8f2ff;
+    border: 1px solid rgba(143, 196, 255, 0.9);
+    box-shadow: 0 0 10px rgba(143, 196, 255, 0.45);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 2px; border-radius: 2px; background: rgba(255,255,255,0.14);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #e8f2ff; border: 1px solid rgba(143,196,255,0.9);
+  }
+
+  /* 机位切换 */
+  .seg {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    --seg-cols: 3;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .seg.seg4 { grid-template-columns: repeat(4, 1fr); }
+  .seg.seg4 button { font-size: 10px; letter-spacing: 0.02em; padding: 5.5px 0 5px; }
+  .seg.seg2 { grid-template-columns: repeat(2, 1fr); }
+
+  /* 单行形态：标签在左、开关在右，省掉一整行高度 */
+  .row.inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 7px;
+  }
+  .row.inline .row-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    justify-content: flex-start;
+    gap: 7px;
+    white-space: nowrap;
+  }
+  .row.inline .row-label b { color: var(--ink-faint); font-weight: 500; }
+  .row.inline .seg { flex: 0 0 auto; padding: 2px; gap: 3px; }
+  .row.inline .seg button { padding: 4.5px 2px; font-size: 10px; }
+  .row.inline .seg.seg2 { width: 116px; }
+  .row.inline .seg.seg4 { width: 152px; }
+  .seg button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--ink-dim);
+    font: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    padding: 5.5px 2px 5px;
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.18s ease, background 0.18s ease;
+  }
+  .seg button:hover { color: var(--ink); }
+  .seg button.active {
+    background: rgba(143, 196, 255, 0.16);
+    color: #dcecff;
+    box-shadow: inset 0 0 0 1px rgba(143, 196, 255, 0.22);
+  }
+
+  /* 数据读表 */
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    margin-top: 9px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.07);
+  }
+  .stat {
+    background: rgba(10, 15, 23, 0.55);
+    padding: 7px 10px 6px;
+  }
+  .stat .k {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--ink-faint);
+  }
+  .stat .v {
+    margin-top: 3px;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .v small {
+    font-size: 9.5px;
+    font-weight: 400;
+    color: var(--ink-faint);
+    margin-left: 3px;
+    letter-spacing: 0.08em;
+  }
+
+  .hint {
+    margin-top: 8px;
+    font-size: 9.5px;
+    letter-spacing: 0.05em;
+    color: rgba(233, 240, 248, 0.26);
+    line-height: 1.6;
+  }
+  .hint kbd {
+    font: inherit;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 4px;
+    padding: 0 4px;
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 620px) {
+    #panel { left: 14px; bottom: 14px; width: calc(100vw - 28px); max-width: 300px; }
+    #brand { left: 18px; top: 18px; }
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- 加载遮罩 -->
+  <div id="loader">
+    <div class="loader-mark"></div>
+    <div class="loader-title">无限公路巡航</div>
+    <div class="loader-bar"><i id="loader-bar-fill"></i></div>
+    <div class="loader-status" id="loader-status">正在初始化…</div>
+  </div>
+
+  <!-- 左上标题 -->
+  <div id="brand">
+    <div class="t1">无限公路 · 直线巡航</div>
+    <div class="t2">INFINITE ROAD &nbsp;/&nbsp; 单向三车道 &nbsp;/&nbsp; 无限直路</div>
+  </div>
+
+  <!-- 控制面板 -->
+  <div id="panel">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot" id="status-dot"></span><span id="status-text">运行中</span></div>
+      <div class="head-actions">
+        <button class="ghost-btn play-btn" id="btn-play"><span class="ico pause" id="play-ico"></span><span id="play-label">熄火</span></button>
+        <button class="ghost-btn icon-btn" id="btn-collapse" title="收起面板" aria-label="收起面板"><span class="caret" id="collapse-ico"></span></button>
+      </div>
+    </div>
+
+    <div class="panel-body">
+    <div class="row">
+      <div class="row-label"><span>设定车速</span><b><span id="speed-val">100.0</span> km/h</b></div>
+      <input id="speed" type="range" min="0" max="220" step="1" value="100" />
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>机位</span><b id="cam-name">主驾侧</b></div>
+      <div class="seg" id="cam-seg">
+        <button data-mode="0" class="active">主驾侧</button>
+        <button data-mode="1">跟车后视</button>
+        <button data-mode="2">副驾侧前</button>
+        <button data-mode="3">高位全景</button>
+        <button data-mode="4">主驾视角</button>
+      </div>
+    </div>
+
+    <div class="row inline">
+      <div class="row-label"><span>车门</span><b id="door-state">全部关闭</b></div>
+      <div class="seg seg2" id="door-seg">
+        <button data-door="L">主驾车门</button>
+        <button data-door="R">副驾车门</button>
+      </div>
+    </div>
+
+    <div class="row inline">
+      <div class="row-label"><span>相机回正</span><b id="cam-return-state">开</b></div>
+      <div class="seg seg2" id="cam-return-seg">
+        <button data-return="1" class="active">开</button>
+        <button data-return="0">关</button>
+      </div>
+    </div>
+
+    <div class="row inline">
+      <div class="row-label"><span>引擎声</span><b id="engine-state">开</b></div>
+      <div class="seg seg2" id="engine-seg">
+        <button data-engine="1" class="active">开</button>
+        <button data-engine="0">关</button>
+      </div>
+    </div>
+
+    <div class="row inline">
+      <div class="row-label"><span>时段</span><b id="tod-name">清晨</b></div>
+      <div class="seg seg4" id="tod-seg">
+        <button data-tod="dawn">拂晓</button>
+        <button data-tod="morning" class="active">清晨</button>
+        <button data-tod="dusk">黄昏</button>
+        <button data-tod="night">夜晚</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>环境光</span><b><span id="envlight-val">0.60</span></b></div>
+      <input id="envlight" type="range" min="0" max="1.5" step="0.05" value="0.6" />
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>主光（太阳）</span><b><span id="sunlight-val">1.50</span></b></div>
+      <input id="sunlight" type="range" min="0" max="3" step="0.05" value="1.5" />
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>视角 X（水平）</span><b><span id="camyaw-val">0.0</span>°</b></div>
+      <input id="camyaw" type="range" min="-180" max="180" step="0.5" value="0" />
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>视角 Y（俯仰）</span><b><span id="campitch-val">0.0</span>°</b></div>
+      <input id="campitch" type="range" min="0" max="30" step="0.1" value="0" />
+    </div>
+
+    <div class="row">
+      <div class="row-label"><span>镜头距离（Z）</span><b><span id="camdist-val">6.0</span> m</b></div>
+      <input id="camdist" type="range" min="6" max="12" step="0.2" value="6" />
+    </div>
+
+
+    <div class="stats">
+      <div class="stat"><div class="k">当前车速</div><div class="v"><span id="cur-speed">100.8</span><small>km/h</small></div></div>
+      <div class="stat"><div class="k">累计里程</div><div class="v"><span id="odometer">0.00</span><small>km</small></div></div>
+    </div>
+
+    <div class="hint"><kbd>空格</kbd> 启动/熄火 &nbsp;·&nbsp; 拖动画面环绕 &nbsp;·&nbsp; <kbd>1</kbd>–<kbd>5</kbd> 机位 &nbsp;·&nbsp; <kbd>P</kbd> 拾取零件</div>
+    </div>
+  </div>
+
+  <!-- three.js 全部走本地 vendor，离线可跑 -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/"
+    }
+  }
+  </script>
+  <script type="module" src="./src/main.js?v=20261104a"></script>
+</body>
+</html>
