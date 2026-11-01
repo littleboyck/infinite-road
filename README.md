@@ -2,9 +2,11 @@
 
 一个用 three.js 手写的「无限直路」跟车 / 环视 Web 演示：没有赛道、没有道路网格，车永远停在原点跑，世界靠天空穹顶 + 车辆模型 + 里程表营造出一直向前的错觉。
 
+**在线体验：<https://littleboyck.github.io/infinite-road/>**
+
 ![主界面](screenshots/readme1.jpeg)
 
-> 纯静态站点，零构建、零依赖安装（three.js 已内联在 `vendor/`），双击 `index.html` 用任意静态服务器打开即可。
+> 纯静态站点，零构建、零依赖安装（three.js 已内联在 `vendor/`），用任意静态服务器打开即可；GitHub Pages 上直接可跑。
 
 ## 目录
 
