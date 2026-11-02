@@ -9,7 +9,9 @@
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { createSky, createEnvironment } from './sky.js?v=20261102w';
+import { createParticleReveal } from './particles-reveal.js?v=20261102a';
 
 // ------------------------------------------------------------------ 常量
 const ASSETS = {
@@ -109,6 +111,10 @@ const els = {
   sunLight: document.getElementById('sunlight'),
   sunLightVal: document.getElementById('sunlight-val'),
   camSeg: document.getElementById('cam-seg'),
+  orbitSeg: document.getElementById('orbit-seg'),
+  orbitState: document.getElementById('orbit-state'),
+  particlesSeg: document.getElementById('particles-seg'),
+  particlesState: document.getElementById('particles-state'),
   camName: document.getElementById('cam-name'),
   curSpeed: document.getElementById('cur-speed'),
   odometer: document.getElementById('odometer'),
@@ -144,9 +150,30 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.12, 2600);
 camera.position.set(0, 3, -8);
 
-// 天空穹顶 + 环境反射
+// ------------------------------------------------------------------ 全景查看器（OrbitControls）
+// 上面的机位是「焊在车上」的：只能绕车转、不能缩放/平移。
+// 这里备一套标准 OrbitControls 接管相机：左键环绕、滚轮缩放，target 平滑跟随车辆，
+// 边开边看整条无限公路。默认关闭，不影响原有交互。
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enabled = false;
+// 按「设计插件视口」的手感来：左键环绕、右键平移、滚轮缩放，俯仰不设限
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.rotateSpeed = 0.9;
+controls.zoomSpeed = 1.0;
+controls.panSpeed = 1.0;
+controls.screenSpacePanning = true;        // 平移沿屏幕平面走（和 Blender/编辑器一致）
+controls.enablePan = true;
+controls.minDistance = 0.6;
+controls.maxDistance = 2400;               // 能一路飞过穹顶（半径 900）再从外面看回来
+controls.minPolarAngle = 0;                // 可以完全仰视 / 俯视
+controls.maxPolarAngle = Math.PI;
+controls.target.set(0, 1, 0);
+
+// 环境反射（PMREM 天空）
+// 穹顶网格不加入场景：背景直接用纯色，车漆的反射仍由环境贴图提供。
 const sky = createSky({ sunDir: new THREE.Vector3(0.72, 0.42, 0.28) });
-scene.add(sky.mesh);
+scene.background = new THREE.Color(0x0a111a);   // 与页面底色一致
 createEnvironment(renderer, scene);
 // 环境贴图（PMREM 天空）本身很亮，会整体抬高材质的环境光；这里压到 0.45
 scene.environmentIntensity = 0.6;
@@ -244,6 +271,79 @@ bounce.target.position.set(0, 0, 0);
 scene.add(bounce);
 scene.add(bounce.target);
 
+// 地面是粒子、没有实体地板，单独放一块「只画影子」的圆盘来接住车的投影。
+// ShadowMaterial 只在被遮挡处出颜色，其余像素完全透明，所以看不见地板本身；
+// renderOrder 排在粒子之后，影子会压在粒子地面上，而不是被粒子盖掉。
+// 用 MultiplyBlending 把阴影「乘」到已有画面上（粒子也是半透明叠加，
+// 普通 NormalBlending 的黑色阴影压在近黑的场景里根本看不出来）：
+// 亮处输出 1.0 → 画面不变；阴影里输出 1-opacity → 把底下的粒子地面压暗。
+// 影子强度：0 = 完全看不见，1 = 正常。凝结阶段随进度线性长出来，避免「啪」一下出现
+const shadowFade = { value: 0 };
+
+const shadowMat = new THREE.ShadowMaterial({ opacity: 0.72 });
+shadowMat.blending = THREE.MultiplyBlending;
+shadowMat.transparent = true;
+shadowMat.depthWrite = false;
+shadowMat.onBeforeCompile = (shader) => {
+  shader.uniforms.uShadowFade = shadowFade;
+  shader.fragmentShader = 'uniform float uShadowFade;\n' + shader.fragmentShader
+    .replace('#include <tonemapping_fragment>', '')
+    .replace('#include <colorspace_fragment>', '')
+    .replace(
+      'gl_FragColor = vec4( color, opacity * ( 1.0 - getShadowMask() ) );',
+      'float sh = 1.0 - getShadowMask();\n\tgl_FragColor = vec4( vec3( mix( 1.0, 1.0 - opacity * uShadowFade, sh ) ), 1.0 );'
+    );
+};
+const shadowCatcher = new THREE.Mesh(new THREE.CircleGeometry(48, 64), shadowMat);
+shadowCatcher.name = 'ShadowCatcher';
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.position.y = 0.001;
+shadowCatcher.receiveShadow = true;
+shadowCatcher.renderOrder = 10;
+scene.add(shadowCatcher);
+
+// 车底「接触阴影」：跟太阳方向无关的软阴影，保证从任何角度看车都稳稳落在地面上
+// （上面那块 ShadowMaterial 是真实投影，太阳在车后方时会被车身自己挡住）。
+// 同样用 MultiplyBlending：白 = 不变，灰 = 压暗，所以画在粒子地面之上也没问题。
+function makeContactShadowTexture() {
+  const size = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, size, size);
+  const grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grd.addColorStop(0.0, '#3c3c3c');
+  grd.addColorStop(0.34, '#6e6e6e');
+  grd.addColorStop(0.62, '#b4b4b4');
+  grd.addColorStop(0.84, '#e6e6e6');
+  grd.addColorStop(1.0, '#ffffff');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.NoColorSpace;
+  return tex;
+}
+const contactMat = new THREE.MeshBasicMaterial({
+  map: makeContactShadowTexture(),
+  blending: THREE.MultiplyBlending,
+  depthWrite: false,
+  toneMapped: false,
+});
+contactMat.onBeforeCompile = (shader) => {
+  shader.uniforms.uShadowFade = shadowFade;
+  shader.fragmentShader = 'uniform float uShadowFade;\n' + shader.fragmentShader.replace(
+    '#include <map_fragment>',
+    '#include <map_fragment>\n\tdiffuseColor.rgb = mix( vec3( 1.0 ), diffuseColor.rgb, uShadowFade );'
+  );
+};
+const contactShadow = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 7.6), contactMat);
+contactShadow.name = 'ContactShadow';
+contactShadow.rotation.x = -Math.PI / 2;
+contactShadow.position.y = 0.0008;
+contactShadow.renderOrder = 9;
+scene.add(contactShadow);
+
 // ------------------------------------------------------------------ 应用时段预设
 let currentPreset = 'dusk';
 function applyPreset(name) {
@@ -313,8 +413,9 @@ const state = {
   speedTarget: 100 / 3.6,  // m/s（内部一律用 m/s，界面显示 km/h）
   speedNow: 0,      // m/s
   camMode: 0,
+  orbitView: false,   // true = OrbitControls 接管相机（全景查看）
   camDist: 6.0,     // 镜头后拉距离（m），滑杆可调
-  camAutoReturn: true, // 松手后相机是否自动回到机位默认角度（控制台「相机回正」开关）
+  camAutoReturn: true,  // 松手后相机是否自动回到机位默认角度（控制台「相机回正」开关）
 
   carBody: null,     // 车身组（车轮之外的部件）
   wheels: [],        // 四个车轮节点 { node, baseQuat, front }
@@ -346,6 +447,9 @@ const camTween = {
 };
 
 const carPos = new THREE.Vector3();
+// 退出全景模式时，从原镜头位置回到车载机位的过渡量
+const _prevCam = new THREE.Vector3();
+let camBlend = 0;
 const camLook = new THREE.Vector3();
 
 // 鼠标环绕：水平方向 360° 自由旋转（不设限），垂直 0~30°，松手回到基准角度位
@@ -829,6 +933,9 @@ function updateDoors(dt) {
   }
 }
 
+// 首次加载就直接进入粒子 → 实体车的序列（不再先闪一下实体车）
+const AUTO_PARTICLES = true;
+
 // ------------------------------------------------------------------ 启动
 async function boot() {
   setProgressUI('正在载入车辆模型…');
@@ -845,7 +952,22 @@ async function boot() {
     progress.car = 1;
   });
 
-  // 3) 第一帧前把着色器编译掉，避免淡入后卡一下
+  // 3) 默认开播的粒子聚合：必须在第一帧渲染之前就接管车体，
+  //    否则淡入后会有「先露一下实体车、再变粒子」的闪帧。
+  if (AUTO_PARTICLES) {
+    setProgressUI('正在聚合粒子…');
+    const reveal = ensureParticleReveal();
+    if (reveal) {
+      // 先在遮罩后面把凝结阶段的着色器/贴图跑热，避免凝结开始那一帧卡顿
+      reveal.prewarm(renderer, scene, camera);
+      reveal.play();
+      // 聚合阶段车体还没出来，影子强度置 0（凝结时由 tick 线性拉起来）
+      shadowFade.value = 0;
+      updateParticlesUI();
+    }
+  }
+
+  // 4) 第一帧前把着色器编译掉，避免淡入后卡一下
   setProgressUI('正在准备场景…');
   if (renderer.compileAsync) {
     try {
@@ -858,7 +980,6 @@ async function boot() {
   // 4) 初始位置
   updateCarTransform(0);
   updateCameraRig(0.016, true);
-  sky.update(camera);
   updateLights();
 
   setProgressUI('准备就绪');
@@ -1107,6 +1228,39 @@ function updateDoorCamSeq(dt) {
   }
 }
 
+/**
+ * 全景查看器开关。
+ * 打开：OrbitControls 接管相机，target 平滑跟随车辆，可自由环绕/缩放；
+ * 关闭：交还车载机位，镜头用一小段过渡追回车位（不会硬切）。
+ */
+function setOrbitView(on) {
+  const next = !!on;
+  if (next === state.orbitView) return;
+  state.orbitView = next;
+  controls.enabled = next;
+  camTween.active = false;
+  if (next) {
+    // 切到编辑器式视口：拉到一个 3/4 高位，车和周围整片场景一起入画
+    controls.target.copy(carPos).addScaledVector(UP, 1.0);
+    const d = 22, az = 40 * DEG, polar = 68 * DEG;
+    camera.position.set(
+      controls.target.x + d * Math.sin(polar) * Math.sin(az),
+      controls.target.y + d * Math.cos(polar),
+      controls.target.z + d * Math.sin(polar) * Math.cos(az),
+    );
+    controls.update();
+    camBlend = 0;
+  } else {
+    camBlend = 1;   // 交给 tick 里的混合，平滑追回车载机位
+  }
+  if (els.orbitState) els.orbitState.textContent = next ? '开' : '关';
+  if (els.orbitSeg) {
+    for (const b of els.orbitSeg.querySelectorAll('button[data-orbit]')) {
+      b.classList.toggle('active', (b.dataset.orbit === '1') === next);
+    }
+  }
+}
+
 function setCamMode(i, opts = {}) {
   const mode = CAM_MODES[i];
   if (!mode) return;
@@ -1124,6 +1278,7 @@ function setCamMode(i, opts = {}) {
 function applyCamMode(i) {
   const mode = CAM_MODES[i];
   if (!mode) return;
+  if (state.orbitView) setOrbitView(false);   // 点机位按钮 = 回到车载视角
   state.camMode = i;
   if (els.camName) els.camName.textContent = mode.name;
   if (els.camSeg) {
@@ -1364,6 +1519,7 @@ function updateLights() {
 
 // ------------------------------------------------------------------ 鼠标环绕交互
 function onPointerDown(e) {
+  if (state.orbitView) return;   // 全景模式下交给 OrbitControls
   if (e.button !== undefined && e.button !== 0) return;
   camTween.active = false;   // 手动拖视角时立刻接管，不再走机位过渡
   orbit.dragging = true;
@@ -1504,9 +1660,31 @@ function tick(now) {
   updateEngine(dt);
   updateSpeedWave(dt);
   updateOrbit(dt);
-  updateCameraRig(dt, false);
-  sky.update(camera);
+  if (state.orbitView) {
+    // 全景查看器：完全交给 OrbitControls，target 不再被拽回车（否则平移/拉远会被顶回去）
+    controls.update();
+  } else {
+    _prevCam.copy(camera.position);
+    updateCameraRig(dt, false);
+    // 刚从全景模式切回来：从原镜头位置平滑追到车载机位
+    if (camBlend > 0) {
+      camBlend = Math.max(0, camBlend - dt * 1.7);
+      camera.position.lerpVectors(camera.position, _prevCam, camBlend * camBlend);
+      camera.lookAt(camLook);
+    }
+  }
   updateLights();
+
+  // 粒子聚合（插件自管时间线；播完自己收尾）
+  if (particleReveal && particleReveal.active) particleReveal.update();
+
+  // 车影的可见度跟着凝结进度线性增加：粒子阶段 0 → 凝结 0..1 → 结束后常满
+  if (particleReveal) {
+    const ph = particleReveal.phase;
+    shadowFade.value = (ph === 'aggregate' || ph === 'paint')
+      ? 0
+      : (ph === 'dissolve' ? particleReveal.state.dissolveT : 1);
+  }
 
   // HUD
   if (els.curSpeed) els.curSpeed.textContent = (state.speedNow * 3.6).toFixed(1);
@@ -1602,6 +1780,80 @@ els.camSeg.addEventListener('click', (e) => {
   if (btn) setCamMode(Number(btn.dataset.mode));
 });
 
+if (els.orbitSeg) {
+  els.orbitSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-orbit]');
+    if (btn) setOrbitView(btn.dataset.orbit === '1');
+  });
+}
+
+// ------------------------------------------------------------------ 粒子聚合
+// demo/particles.js 那套「聚合 → 上色 → 凝结」效果，通过 src/particles-reveal.js 复用。
+// 这里只负责：懒创建（首次点击才 build，省掉 320k 粒子的采样时间）、按钮状态、每帧 update。
+let particleReveal = null;
+
+const PHASE_TEXT = {
+  aggregate: '聚合中',
+  paint: '上色中',
+  dissolve: '凝结中',
+  done: '完成',
+  idle: '待命',
+};
+
+function updateParticlesUI() {
+  const playing = particleReveal ? (particleReveal.active || particleReveal.phase === 'dissolve') : false;
+  if (els.particlesState) {
+    els.particlesState.textContent = particleReveal
+      ? (PHASE_TEXT[particleReveal.phase] || '待命')
+      : '待命';
+  }
+  if (els.particlesSeg) {
+    for (const b of els.particlesSeg.querySelectorAll('button[data-particles]')) {
+      b.classList.toggle('active', (b.dataset.particles === '1') === playing);
+    }
+  }
+}
+
+function ensureParticleReveal() {
+  if (particleReveal || !state.car) return particleReveal;
+  particleReveal = createParticleReveal({
+    groundCount: 200000,       // 地面粒子：地面只以粒子形式存在，不凝结成实体
+    groundRadius: 9,
+    scene,
+    camera,
+    renderer,
+    car: state.car,
+    carCount: 320000,
+    loop: false,
+    onPhase: () => updateParticlesUI(),
+    onFinish: () => updateParticlesUI(),
+  });
+  return particleReveal;
+}
+
+function setParticles(on) {
+  const next = !!on;
+  if (!next) {
+    particleReveal?.stop();
+    shadowFade.value = 1;
+    updateParticlesUI();
+    return;
+  }
+  // 新一轮聚合：车体消失，影子从 0 重新长出来
+  shadowFade.value = 0;
+  const reveal = ensureParticleReveal();
+  if (!reveal) return;
+  reveal.play();
+  updateParticlesUI();
+}
+
+if (els.particlesSeg) {
+  els.particlesSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-particles]');
+    if (btn) setParticles(btn.dataset.particles === '1');
+  });
+}
+
 // 车门按钮（主驾 / 副驾，点一下开/关）
 if (els.doorSeg) {
   els.doorSeg.addEventListener('click', (e) => {
@@ -1624,6 +1876,8 @@ window.addEventListener('keydown', (e) => {
     setPlaying(!state.playing);
   } else if (/^[1-9]$/.test(e.key) && Number(e.key) <= CAM_MODES.length) {
     setCamMode(Number(e.key) - 1);
+  } else if (e.key === 'v' || e.key === 'V') {
+    setOrbitView(!state.orbitView);
   }
 });
 
@@ -1981,6 +2235,11 @@ window.__viaduct = {
   camera,
   state,
   camModes: CAM_MODES, // 调试用：可在控制台临时调机位参数
+  orbitControls: controls, // 全景查看器的 OrbitControls 实例
+  setOrbitView,
+  get particles() { return particleReveal; },
+  get shadowFade() { return shadowFade.value; },
+  setParticles,
   get errors() {
     return errors;
   },
@@ -1991,6 +2250,7 @@ window.__viaduct = {
       odometer: state.odometer,
       speedNow: state.speedNow,
       camMode: state.camMode,
+      orbitView: state.orbitView,
       orbitYaw: orbit.yaw,
       camPos: camera.position.toArray(),
       camLook: camLook.toArray(),
